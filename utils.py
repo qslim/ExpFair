@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 import os
 from sklearn.metrics import f1_score, roc_auc_score, accuracy_score
-import torch.nn.functional as F
 
 
 def seed_everything(seed):
@@ -60,57 +59,11 @@ def fair_metric(output, idx, labels, sens):
     return parity, equality
 
 
-def group_by_attr(idx, attr):
-    sens_idx_0 = np.where(attr.cpu() == 0)[0]
-    sens_idx_1 = np.where(attr.cpu() == 1)[0]
-    sens_idx_0 = np.asarray(list(set(idx.cpu().numpy()) & set(sens_idx_0)))
-    sens_idx_1 = np.asarray(list(set(idx.cpu().numpy()) & set(sens_idx_1)))
-    sens_idx_0 = torch.LongTensor(sens_idx_0)
-    sens_idx_1 = torch.LongTensor(sens_idx_1)
-    return sens_idx_0, sens_idx_1
-
-
-def fair_metric_threshold_dp(output, idx, labels, sens, threshold0, threshold1):
-    sens_idx_0, sens_idx_1 = group_by_attr(idx, sens)
-
-    pred_y_0 = (output[sens_idx_0].squeeze() > threshold0).type_as(labels).cpu().numpy()
-    pred_y_1 = (output[sens_idx_1].squeeze() > threshold1).type_as(labels).cpu().numpy()
-
-    parity = abs(sum(pred_y_0) / sens_idx_0.shape[0] - sum(pred_y_1) / sens_idx_1.shape[0])
-
-    return parity
-
-
-def fair_metric_threshold_eo(output, idx, labels, sens, threshold0, threshold1):
-    sens_idx_0, sens_idx_1 = group_by_attr(idx, sens)
-    _, sens0_label1_idx = group_by_attr(sens_idx_0, labels)
-    _, sens1_label1_idx = group_by_attr(sens_idx_1, labels)
-
-    sens0_label1_pred = (output[sens0_label1_idx].squeeze() > threshold0).type_as(labels).cpu().numpy()
-    sens1_label1_pred = (output[sens1_label1_idx].squeeze() > threshold1).type_as(labels).cpu().numpy()
-
-    equality = abs(sum(sens0_label1_pred) / sens0_label1_idx.shape[0] - sum(sens1_label1_pred) / sens1_label1_idx.shape[0])
-
-    return equality
-
-
-def accuracy_threshold(output, idx, labels, sens, threshold0, threshold1):
+def orthogonal_projection(output, output_sens, config):
     output = output.squeeze()
-
-    sens_idx_0, sens_idx_1 = group_by_attr(idx, sens)
-
-    preds_0 = (output[sens_idx_0] > threshold0).type_as(labels)
-    correct_0 = preds_0.eq(labels[sens_idx_0]).double()
-
-    preds_1 = (output[sens_idx_1] > threshold1).type_as(labels)
-    correct_1 = preds_1.eq(labels[sens_idx_1]).double()
-
-    correct = correct_0.sum() + correct_1.sum()
-
-    return correct / (sens_idx_0.shape[0] + sens_idx_1.shape[0])
-
-
-def cosine_similarity(output, sens, idx):
-    _output, _sens = output.squeeze()[idx], sens.squeeze()[idx].float()
-    _output, _sens = _output - torch.mean(_output), _sens - torch.mean(_sens)
-    return F.cosine_similarity(_output.unsqueeze(0), _sens.unsqueeze(0)).squeeze().abs()
+    output_mean = output.mean()
+    output_sens = output_sens.squeeze()
+    output_sens_c = output_sens - output_sens.mean()
+    output = ((output - output_mean) - config['orthogonality'] * ((output - output_mean) * output_sens_c).sum() / (
+                output_sens_c.pow(2).sum() + 1e-8) * output_sens_c + output_mean).unsqueeze(-1)
+    return output

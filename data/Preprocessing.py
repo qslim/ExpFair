@@ -66,33 +66,19 @@ def load_data(path_root, dataset, label_number, sens_number):
         # norm_features[:, sens_idx] = features[:, sens_idx]
         features = norm_features
         idx_sens_train = idx_train
-    # elif dataset == 'synthetic':
-    #     sens_idx = 0
-    #     label_number = 1000
-    #     path_sythetic = path_root + './dataset/synthetic.mat'
-    #     adj, features, labels, idx_train, idx_val, idx_test, sens, raw_data_info = load_synthetic(path=path_sythetic,
-    #                                                                           label_number=label_number)
-    elif dataset in ['nba', 'pokec_z', 'pokec_n']:
+
+    elif dataset in ['pokec_z', 'pokec_n']:
         # Load the dataset and split
-        if dataset != 'nba':
-            if dataset == 'pokec_z':
-                dataset = 'region_job'
-            else:
-                dataset = 'region_job_2'
-            sens_attr = "region"
-            predict_attr = "I_am_working_in_field"
-            # label_number = 500
-            # sens_number = 200
-            seed = 20
-            path = "../dataset/pokec/"
+        if dataset == 'pokec_z':
+            dataset = 'region_job'
         else:
-            dataset = 'nba'
-            sens_attr = "country"
-            predict_attr = "SALARY"
-            # label_number = 100
-            # sens_number = 50
-            seed = 20
-            path = "../dataset/NBA"
+            dataset = 'region_job_2'
+        sens_attr = "region"
+        predict_attr = "I_am_working_in_field"
+        # label_number = 500
+        # sens_number = 200
+        seed = 20
+        path = "../dataset/pokec/"
 
         adj, features, labels, idx_train, idx_val, idx_test, sens, idx_sens_train = load_pokec(dataset,
                                                                                         sens_attr,

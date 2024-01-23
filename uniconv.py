@@ -16,9 +16,6 @@ class SineEncoding(nn.Module):
         self.eig_w = nn.Linear(hidden_dim + 1, hidden_dim)
 
     def forward(self, e):
-        # input:  [N]
-        # output: [N, d]
-
         ee = e * self.constant
         div = torch.exp(torch.arange(0, self.hidden_dim, 2) * (-math.log(10000) / self.hidden_dim)).to(e.device)
         pe = ee.unsqueeze(1) * div
@@ -28,12 +25,10 @@ class SineEncoding(nn.Module):
 
 
 class FeedForwardNetwork(nn.Module):
-
     def __init__(self, input_dim, hidden_dim, output_dim):
         super(FeedForwardNetwork, self).__init__()
         self.ffn = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
-            # nn.LayerNorm(hidden_dim),
             nn.GELU(),
             nn.Linear(hidden_dim, output_dim),
         )
@@ -44,7 +39,6 @@ class FeedForwardNetwork(nn.Module):
 
 
 class SpecLayer(nn.Module):
-
     def __init__(self, hidden_dim, signal_dim, prop_dropout=0.0):
         super(SpecLayer, self).__init__()
         self.prop_dropout = nn.Dropout(prop_dropout)
@@ -52,8 +46,6 @@ class SpecLayer(nn.Module):
             nn.Linear(hidden_dim, signal_dim),
             nn.LayerNorm(signal_dim),
             nn.GELU()
-            # nn.ELU()
-            # nn.ReLU()
         )
 
     def forward(self, x):
@@ -69,7 +61,6 @@ class Filter(nn.Module):
 
         self.eig_encoder = SineEncoding(hidden_dim)
         self.decoder = nn.Linear(hidden_dim, 1)
-
         self.mha_norm = nn.LayerNorm(hidden_dim)
         self.ffn_norm = nn.LayerNorm(hidden_dim)
         self.mha_dropout = nn.Dropout(tran_dropout)
@@ -78,32 +69,26 @@ class Filter(nn.Module):
         self.ffn = FeedForwardNetwork(hidden_dim, hidden_dim, hidden_dim)
 
     def forward(self, e):
-        eig = self.eig_encoder(e)  # [N, d]
+        eig = self.eig_encoder(e)
         mha_eig = self.mha_norm(eig)
         mha_eig, attn = self.mha(mha_eig, mha_eig, mha_eig)
         eig = eig + self.mha_dropout(mha_eig)
         ffn_eig = self.ffn_norm(eig)
         ffn_eig = self.ffn(ffn_eig)
         eig = eig + self.ffn_dropout(ffn_eig)
-        new_e = self.decoder(eig)  # [N, m]
+        new_e = self.decoder(eig)
         return new_e
 
 
-class Uniconv(nn.Module):
-
+class UniConv(nn.Module):
     def __init__(self, nfeat, nclass=1, config=None):
-        super(Uniconv, self).__init__()
+        super(UniConv, self).__init__()
 
         self.feat_encoder = nn.Sequential(
-            nn.Linear(nfeat, config['hidden_dim']),
-            # nn.ReLU(),
-            # nn.Linear(hidden_dim, hidden_dim),
-            # nn.ReLU(),
+            nn.Linear(nfeat, config['hidden_dim'])
         )
-        self.classify = nn.Linear(config['signal_dim'], nclass)
-
-        self.filter = Filter(hidden_dim=config['filter_dim'], nheads=config['num_heads'], tran_dropout=config['tran_dropout'])
-
+        self.classifier = nn.Linear(config['signal_dim'], nclass)
+        self.filter = Filter(hidden_dim=config['filter_dim'], nheads=1, tran_dropout=config['tran_dropout'])
         self.feat_dp1 = nn.Dropout(config['feat_dropout'])
         self.feat_dp2 = nn.Dropout(config['feat_dropout'])
         layers = [SpecLayer(config['hidden_dim'], config['hidden_dim'], config['prop_dropout']) for i in range(config['nlayer'] - 1)]
@@ -116,33 +101,22 @@ class Uniconv(nn.Module):
         h = self.feat_encoder(h)
 
         filter = self.filter(e)
-
         for conv in self.layers:
             utx = ut @ h
             y = u @ (filter * utx)
             h = h + y
             h = conv(h)
-
         h = self.feat_dp2(h)
-        pred = self.classify(h)
-
+        pred = self.classifier(h)
         return pred
 
 
-class Uniconv_wrapper(nn.Module):
-    def __init__(self, nfeat, config, shd_filter=False, shd_trans=False):
-        super(Uniconv_wrapper, self).__init__()
-
-        self.uniconv_s = Uniconv(nfeat=nfeat, nclass=1, config=config)
+class UniConvWrapper(nn.Module):
+    def __init__(self, nfeat, config):
+        super(UniConvWrapper, self).__init__()
+        self.uniconv_s = UniConv(nfeat=nfeat, nclass=1, config=config)
         config['signal_dim'] = config['hidden_dim']
-        self.uniconv_y = Uniconv(nfeat=nfeat, nclass=1, config=config)
-
-        if shd_filter:
-            print('Applying shd_filter...')
-            self.uniconv_s.filter = self.uniconv_y.filter
-        if shd_trans:
-            print('Applying shd_trans...')
-            self.uniconv_s.layers = self.uniconv_y.layers
+        self.uniconv_y = UniConv(nfeat=nfeat, nclass=1, config=config)
 
     def forward(self, e, u, x):
         pred_s = self.uniconv_s(e, u, x)
