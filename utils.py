@@ -24,10 +24,6 @@ def init_params(module):
             module.bias.data.zero_()
 
 
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-
 def accuracy(output, labels):
     output = output.squeeze()
     preds = (output > 0).type_as(labels)

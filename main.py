@@ -11,7 +11,7 @@ sys.path.append('..')
 from uniconv import UniConvWrapper
 from data.Preprocessing import load_data
 import scipy as sp
-from utils import seed_everything, init_params, count_parameters, accuracy, fair_metric, evaluation_results, orthogonal_projection
+from utils import seed_everything, init_params, accuracy, fair_metric, orthogonal_projection
 
 
 def main_worker(seed, result_queue, config, E, U, x, labels, idx_train, idx_val, idx_test, sens, idx_sens_train):
@@ -21,13 +21,9 @@ def main_worker(seed, result_queue, config, E, U, x, labels, idx_train, idx_val,
                          config=config).cuda()
     net.apply(init_params)
     optimizer = torch.optim.Adam(net.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
-    print(count_parameters(net))
 
     best_acc = 0.0
-    best_loss = 1e5
     best_epoch = -1
-    best_auc_roc_test = 0.0
-    best_f1_s_test = 0.0
     best_test = 0.0
     best_dp_test = 1e5
     best_eo_test = 1e5
@@ -44,51 +40,35 @@ def main_worker(seed, result_queue, config, E, U, x, labels, idx_train, idx_val,
                                                   sens[idx_sens_train].unsqueeze(1).float())
         loss_cls = F.binary_cross_entropy_with_logits(output[idx_train], labels[idx_train].unsqueeze(1).float())
         loss = loss_cls + loss_sens
-        acc_train_sens = accuracy(output_sens[idx_train], sens[idx_train]) * 100.0
         acc_train = accuracy(output[idx_train], labels[idx_train]) * 100.0
         loss.backward()
         optimizer.step()
 
         net.eval()
         output, output_sens = net(E, U, x)
-        acc_val_sens = accuracy(output_sens[idx_val], sens[idx_val]) * 100.0
-        acc_test_sens = accuracy(output_sens[idx_test], sens[idx_test]) * 100.0
 
-        loss_val = F.binary_cross_entropy_with_logits(output[idx_val], labels[idx_val].unsqueeze(1).float())
         acc_val = accuracy(output[idx_val], labels[idx_val]) * 100.0
         acc_test = accuracy(output[idx_test], labels[idx_test]) * 100.0
         parity_test, equality_test = fair_metric(output, idx_test, labels, sens)
-        auc_roc_test, f1_s_test, _ = evaluation_results(output, labels, idx_test)
-
         parity_test, equality_test = parity_test * 100.0, equality_test * 100.0
-        auc_roc_test, f1_s_test = auc_roc_test * 100.0, f1_s_test * 100.0
 
         if (config['epoch_debias'] == 0 or epoch > config['epoch_fit'] + config['patience']) and acc_val > best_acc:
             best_acc = acc_val.item()
             best_epoch = epoch
-            best_auc_roc_test = auc_roc_test.item()
-            best_f1_s_test = f1_s_test.item()
             best_test = acc_test.item()
             best_dp_test = parity_test
             best_eo_test = equality_test
 
-        print("Epoch {}:".format(epoch),
-              # "cov: {:.4f}".format(cov.item()),
-              "[Loss tr: {:.4f}".format(loss.item()),
-              "va: {:.4f}]".format(loss_val.item()),
-              "[Acc tr: {:.4f}".format(acc_train.item()),
-              "va: {:.4f}".format(acc_val.item()),
-              "te: {:.4f}]".format(acc_test.item()),
-              "[DP: {:.4f}".format(parity_test),
-              "EO: {:.4f}]".format(equality_test),
-              "[Sen-acc tr: {:.4f}".format(acc_train_sens),
-              "va: {:.4f}]".format(acc_val_sens),
-              "te: {:.4f}]".format(acc_test_sens),
-              "{}/{:.4f}".format(best_epoch, best_test))
+            print("Epoch {}:".format(epoch),
+                  "[Acc tr: {:.4f}".format(acc_train.item()),
+                  "va: {:.4f}".format(acc_val.item()),
+                  "te: {:.4f}]".format(acc_test.item()),
+                  "[DP: {:.4f}".format(parity_test),
+                  "EO: {:.4f}]".format(equality_test),
+                  "{}/{:.4f}".format(best_epoch, best_test))
 
     # Put the results in the queue
-    result_queue.put((best_test, best_auc_roc_test, best_f1_s_test, best_dp_test, best_eo_test, best_epoch))
-    # return best_test, best_auc_roc_test, best_f1_s_test, best_dp_test, best_eo_test
+    result_queue.put((best_test, best_dp_test, best_eo_test, best_epoch))
 
 
 def main():
@@ -96,15 +76,13 @@ def main():
     parser.add_argument('--seeds', default=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
     parser.add_argument('--cuda', type=int, default=-1)
     parser.add_argument('--dataset', default='german')
-    parser.add_argument('--rank', type=int, default=0, help="result stat")
     args = parser.parse_args()
 
     config = yaml.load(open('./config.yaml'), Loader=yaml.SafeLoader)[args.dataset]
     config['seeds'] = args.seeds
     config['dataset'] = args.dataset
-    config['rank'] = args.rank
 
-    adj, x, labels, idx_train, idx_val, idx_test, sens, idx_sens_train = load_data(path_root='../',
+    adj, x, labels, idx_train, idx_val, idx_test, sens, idx_sens_train = load_data(path_root='./',
                                                                                    dataset=config['dataset'],
                                                                                    label_number=config['label_number'],
                                                                                    sens_number=config['sens_number'])
@@ -114,7 +92,7 @@ def main():
     assert (torch.equal(torch.abs(sens - 0.5) * 2.0, torch.ones_like(sens)))
 
     eigsh_which = 'LM'
-    dataset_path = '../pt/{}_{}{}.pt'.format(config['dataset'], eigsh_which, config['eigk'])
+    dataset_path = './pt/{}_{}{}.pt'.format(config['dataset'], eigsh_which, config['eigk'])
     if os.path.exists(dataset_path):
         e, u = torch.load(dataset_path)
     else:
@@ -139,7 +117,7 @@ def main():
     except RuntimeError:
         pass
 
-    acc_test, best_auc_roc_test, best_f1_s_test, dp_test, eo_test = [], [], [], [], []
+    acc_test, dp_test, eo_test = [], [], []
     # Create a queue for collecting results
     result_queue = Queue()
     processes = []
@@ -154,42 +132,28 @@ def main():
         p.join()
     # Collect results from the queue
     while not result_queue.empty():
-        (_acc_test, _best_auc_roc_test, _best_f1_s_test, _dp_test, _eo_test, _best_epoch) = result_queue.get()
+        (_acc_test, _dp_test, _eo_test, _best_epoch) = result_queue.get()
         acc_test.append(_acc_test)
-        best_auc_roc_test.append(_best_auc_roc_test)
-        best_f1_s_test.append(_best_f1_s_test)
         dp_test.append(_dp_test)
         eo_test.append(_eo_test)
 
         print("Test results:",
-              "[Acc: {:.4f}".format(_acc_test),
-              "Auc: {:.4f}".format(_best_auc_roc_test),
-              "F1: {:.4f}]".format(_best_f1_s_test),
-              "[DP: {:.4f}".format(_dp_test),
-              "EO: {:.4f}]".format(_eo_test),
+              "Acc: {:.4f}".format(_acc_test),
+              "DP: {:.4f}".format(_dp_test),
+              "EO: {:.4f}".format(_eo_test),
               "Epoch: {}".format(_best_epoch))
 
     acc_test = np.array(acc_test, dtype=float)
-    best_auc_roc_test = np.array(best_auc_roc_test, dtype=float)
-    best_f1_s_test = np.array(best_f1_s_test, dtype=float)
     dp_test = np.array(dp_test, dtype=float)
     eo_test = np.array(eo_test, dtype=float)
 
-    print(config)
-
     ACC = "{:.2f} $\pm$ {:.2f}".format(np.mean(acc_test), np.std(acc_test))
-    AUC = "{:.2f} $\pm$ {:.2f}".format(np.mean(best_auc_roc_test), np.std(best_auc_roc_test))
-    F1 = "{:.2f} $\pm$ {:.2f}".format(np.mean(best_f1_s_test), np.std(best_f1_s_test))
     DP = "{:.2f} $\pm$ {:.2f}".format(np.mean(dp_test), np.std(dp_test))
     EO = "{:.2f} $\pm$ {:.2f}".format(np.mean(eo_test), np.std(eo_test))
     print("Mean over {} run:".format(len(config['seeds'])),
           "Acc: " + ACC,
-          "Auc: " + AUC,
-          "F1: " + F1,
           "DP: " + DP,
           "EO: " + EO)
-
-
 
 if __name__ == '__main__':
     main()
